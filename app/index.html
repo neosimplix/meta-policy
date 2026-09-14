@@ -150,10 +150,22 @@ async function onConnected(token) {
 
 // ---- Step 2: pages + connected IG account ----
 async function loadPages() {
-  const res = await api('me/accounts', { fields: 'id,name,access_token', access_token: userToken });
-  pages = (res.data || []).map(p => ({ ...p, ig: null }));
+  // One call: Pages, their tokens, and the connected IG account in the same response.
+  const res = await api('me/accounts', {
+    fields: 'id,name,access_token,instagram_business_account',
+    access_token: userToken
+  });
 
+  pages = (res.data || []).map(p => ({
+    id: p.id,
+    name: p.name,
+    access_token: p.access_token,
+    ig: p.instagram_business_account ? p.instagram_business_account.id : null
+  }));
+
+  // Fall back to a per-Page read for any Page the batch response left empty.
   for (const p of pages) {
+    if (p.ig) continue;
     const r = await api(p.id, { fields: 'instagram_business_account', access_token: p.access_token });
     if (r && r.instagram_business_account) p.ig = r.instagram_business_account.id;
   }
