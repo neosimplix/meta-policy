@@ -94,87 +94,145 @@
 </main>
 
 <script>
-// Demo scaffold for Meta App Review screencast.
-// Replace APP_ID with 997410669979262 and CONFIG_ID with 1605260767900228
-// to run the real Facebook Login for Business flow.
+// Internal creator discovery tool — Neosimplix
+// Facebook Login for Business + Instagram Creator Marketplace API
 const APP_ID    = '997410669979262';
 const CONFIG_ID = '1605260767900228';
-const DEMO = true; // set false once the real SDK flow is wired
+const VERSION   = 'v26.0';
 
 const $ = id => document.getElementById(id);
 const show = id => $(id).classList.remove('hidden');
+const hide = id => $(id).classList.add('hidden');
 
-const PERMS = ['pages_show_list','pages_manage_metadata','instagram_basic',
-               'instagram_creator_marketplace_discovery','business_management'];
-
-const DEMO_PAGES = [
-  { id:'769145592941409', name:'Dr.Reju-All',    ig:'17841472253564811' },
-  { id:'670783406110278', name:'Rejuallofficial', ig:null }
-];
-
-const DEMO_CREATORS = [
-  { username:'mocked_username_1', country:'KR', gender:'female', age_bucket:'25-34', followers:72000,  engaged:5800,  onboarded:true  },
-  { username:'mocked_username_2', country:'KR', gender:'female', age_bucket:'18-24', followers:31000,  engaged:4100,  onboarded:true  },
-  { username:'mocked_username_3', country:'KR', gender:'male',   age_bucket:'25-34', followers:128000, engaged:9300,  onboarded:false },
-  { username:'mocked_username_4', country:'KR', gender:'female', age_bucket:'35-44', followers:19000,  engaged:2250,  onboarded:true  },
-  { username:'mocked_username_5', country:'KR', gender:'female', age_bucket:'25-34', followers:64000,  engaged:7100,  onboarded:true  }
-];
-
+let userToken = null;
+let pages = [];          // [{id, name, access_token, ig}]
 let selectedPage = null;
 
+// ---- Facebook SDK ----
+window.fbAsyncInit = function () {
+  FB.init({ appId: APP_ID, cookie: true, xfbml: false, version: VERSION });
+  FB.getLoginStatus(r => { if (r.status === 'connected') onConnected(r.authResponse.accessToken); });
+};
+(function (d, s, id) {
+  const fjs = d.getElementsByTagName(s)[0];
+  if (d.getElementById(id)) return;
+  const js = d.createElement(s); js.id = id;
+  js.src = 'https://connect.facebook.net/en_US/sdk.js';
+  fjs.parentNode.insertBefore(js, fjs);
+}(document, 'script', 'facebook-jssdk'));
+
+function api(path, params) {
+  return new Promise(resolve => FB.api('/' + VERSION + '/' + path, params || {}, resolve));
+}
+
+// ---- Step 1: sign in ----
 $('btn-login').addEventListener('click', () => {
-  if (DEMO) {
-    $('who').textContent = 'Signed in as Minjae Kim';
-    $('btn-login').disabled = true;
-    $('btn-login').textContent = 'Signed in';
-    $('granted').textContent = 'Granted: ' + PERMS.join(', ');
-    show('granted');
-    const sel = $('sel-page');
-    sel.innerHTML = DEMO_PAGES.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
-    show('card-page');
-    return;
-  }
-  FB.login(r => { if (r.authResponse) location.reload(); }, { config_id: CONFIG_ID });
+  FB.login(r => {
+    if (r.authResponse) onConnected(r.authResponse.accessToken);
+  }, { config_id: CONFIG_ID });
 });
 
+async function onConnected(token) {
+  userToken = token;
+  $('btn-login').disabled = true;
+  $('btn-login').textContent = 'Signed in';
+
+  const me = await api('me', { fields: 'name', access_token: token });
+  $('who').textContent = me && me.name ? 'Signed in as ' + me.name : 'Signed in';
+
+  const perms = await api('me/permissions', { access_token: token });
+  const granted = (perms.data || []).filter(p => p.status === 'granted').map(p => p.permission);
+  $('granted').textContent = 'Granted: ' + granted.join(', ');
+  show('granted');
+
+  await loadPages();
+}
+
+// ---- Step 2: pages + connected IG account ----
+async function loadPages() {
+  const res = await api('me/accounts', { fields: 'id,name,access_token', access_token: userToken });
+  pages = (res.data || []).map(p => ({ ...p, ig: null }));
+
+  for (const p of pages) {
+    const r = await api(p.id, { fields: 'instagram_business_account', access_token: p.access_token });
+    if (r && r.instagram_business_account) p.ig = r.instagram_business_account.id;
+  }
+
+  $('sel-page').innerHTML = pages.map(p =>
+    `<option value="${p.id}">${p.name}${p.ig ? '' : ' (no Instagram account)'}</option>`).join('');
+  show('card-page');
+}
+
 $('btn-page').addEventListener('click', () => {
-  const id = $('sel-page').value;
-  selectedPage = DEMO_PAGES.find(p => p.id === id);
+  selectedPage = pages.find(p => p.id === $('sel-page').value);
+  if (!selectedPage) return;
+
   $('st-page').textContent =
-    'GET /me/accounts  ->  Page "' + selectedPage.name + '" (' + selectedPage.id + ')\n' +
-    'GET /' + selectedPage.id + '?fields=instagram_business_account  ->  ' +
+    'GET /' + VERSION + '/me/accounts  ->  Page "' + selectedPage.name + '" (' + selectedPage.id + ')\n' +
+    'GET /' + VERSION + '/' + selectedPage.id + '?fields=instagram_business_account  ->  ' +
     (selectedPage.ig ? 'IG user ' + selectedPage.ig : 'no Instagram account connected');
   show('st-page');
+
+  hide('card-search');
+  $('results').innerHTML = '';
+  hide('st-search');
   if (selectedPage.ig) show('card-search');
 });
 
-$('btn-search').addEventListener('click', () => {
+// ---- Step 3: creator search ----
+$('btn-search').addEventListener('click', async () => {
   const country  = $('f-country').value;
   const interest = $('f-interest').value;
-  const igUser   = selectedPage ? selectedPage.ig : '17841472253564811';
+  const ig       = selectedPage.ig;
+
+  const fields = 'id,username,country,gender,age_bucket,onboarded_status,' +
+                 'insights.metrics(total_followers,creator_engaged_accounts).breakdown(GENDER)';
 
   $('st-search').textContent =
-    'GET /' + igUser + '/creator_marketplace_creators\n' +
+    'GET /' + VERSION + '/' + ig + '/creator_marketplace_creators\n' +
     '  ?creator_countries=["' + country + '"]\n' +
     '  &creator_interests=["' + interest + '"]\n' +
-    '  &fields=id,username,country,gender,age_bucket,onboarded_status,\n' +
-    '          insights.metrics(total_followers,creator_engaged_accounts).breakdown(GENDER)';
+    '  &fields=' + fields;
   show('st-search');
+  $('results').innerHTML = '<p class="muted" style="margin-top:14px">Searching…</p>';
 
-  const rows = DEMO_CREATORS.map(c => `
+  const res = await api(ig + '/creator_marketplace_creators', {
+    creator_countries: JSON.stringify([country]),
+    creator_interests: JSON.stringify([interest]),
+    fields: fields,
+    access_token: selectedPage.access_token
+  });
+
+  if (!res || res.error) {
+    $('results').innerHTML =
+      '<p class="muted" style="margin-top:14px">' +
+      (res && res.error ? res.error.message : 'Request failed') + '</p>';
+    return;
+  }
+
+  const list = res.data || [];
+  const metric = (c, name) => {
+    const d = c.insights && c.insights.data ? c.insights.data.find(x => x.name === name) : null;
+    return d && d.total_value ? d.total_value.value : null;
+  };
+  const num = v => (v === null || v === undefined) ? '—' : Number(v).toLocaleString();
+
+  const rows = list.map(c => `
     <tr>
-      <td><strong>@${c.username}</strong></td>
-      <td>${c.country}</td>
-      <td>${c.gender}</td>
-      <td>${c.age_bucket}</td>
-      <td>${c.followers.toLocaleString()}</td>
-      <td>${c.engaged.toLocaleString()}</td>
-      <td>${c.onboarded ? '<span class="pill">onboarded</span>' : '<span class="pill off">not onboarded</span>'}</td>
+      <td><strong>@${c.username || c.id}</strong></td>
+      <td>${c.country || '—'}</td>
+      <td>${c.gender || '—'}</td>
+      <td>${c.age_bucket || '—'}</td>
+      <td>${num(metric(c, 'total_followers'))}</td>
+      <td>${num(metric(c, 'creator_engaged_accounts'))}</td>
+      <td>${c.onboarded_status
+            ? '<span class="pill">onboarded</span>'
+            : '<span class="pill off">not onboarded</span>'}</td>
     </tr>`).join('');
 
   $('results').innerHTML = `
     <p class="muted" style="margin-top:14px">
-      <span class="ok">${DEMO_CREATORS.length} creators</span> returned for ${country} / ${interest}.
+      <span class="ok">${list.length} creators</span> returned for ${country} / ${interest}.
       Standard access returns mocked creator data.
     </p>
     <table>
