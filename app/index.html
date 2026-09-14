@@ -197,8 +197,9 @@ $('btn-search').addEventListener('click', async () => {
   const interest = $('f-interest').value;
   const ig       = selectedPage.ig;
 
+  // total_followers does not accept a breakdown, so request the metrics plain.
   const fields = 'id,username,country,gender,age_bucket,onboarded_status,' +
-                 'insights.metrics(total_followers,creator_engaged_accounts).breakdown(GENDER)';
+                 'insights.metrics(total_followers,creator_engaged_accounts)';
 
   $('st-search').textContent =
     'GET /' + VERSION + '/' + ig + '/creator_marketplace_creators\n' +
