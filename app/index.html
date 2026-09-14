@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Creator Discovery — Neosimplix</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+         background:#f0f2f5; color:#1c1e21; }
+  header { background:#fff; border-bottom:1px solid #dadde1; padding:14px 24px;
+           display:flex; align-items:center; gap:12px; }
+  header h1 { font-size:17px; margin:0; font-weight:600; }
+  header .who { margin-left:auto; font-size:13px; color:#65676b; }
+  main { max-width:1100px; margin:0 auto; padding:24px; }
+  .card { background:#fff; border:1px solid #dadde1; border-radius:8px; padding:20px; margin-bottom:16px; }
+  .step { font-size:12px; color:#65676b; text-transform:uppercase; letter-spacing:.04em; margin-bottom:8px; }
+  h2 { font-size:16px; margin:0 0 6px; }
+  p.note { font-size:13px; color:#65676b; margin:0 0 14px; }
+  button { font:inherit; border:0; border-radius:6px; padding:9px 18px; cursor:pointer; font-weight:600; }
+  .fb { background:#1877f2; color:#fff; }
+  .fb:disabled { background:#bcc0c4; cursor:default; }
+  .sec { background:#e4e6eb; color:#1c1e21; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  select, input { font:inherit; padding:8px 10px; border:1px solid #ccd0d5; border-radius:6px; background:#fff; }
+  table { width:100%; border-collapse:collapse; margin-top:12px; font-size:14px; }
+  th,td { text-align:left; padding:9px 10px; border-bottom:1px solid #e4e6eb; }
+  th { font-size:12px; color:#65676b; font-weight:600; text-transform:uppercase; letter-spacing:.03em; }
+  tbody tr:hover { background:#f7f8fa; }
+  .pill { display:inline-block; font-size:12px; padding:2px 8px; border-radius:10px; background:#e7f3ff; color:#1877f2; }
+  .pill.off { background:#f0f2f5; color:#65676b; }
+  .muted { color:#65676b; font-size:13px; }
+  .hidden { display:none; }
+  .status { font-size:13px; padding:10px 12px; border-radius:6px; background:#f0f2f5; margin-top:12px;
+            white-space:pre-wrap; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .granted { font-size:12px; color:#31a24c; }
+  .ok { color:#31a24c; font-weight:600; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Creator Discovery</h1>
+  <span class="muted">Neosimplix internal marketing tool</span>
+  <span class="who" id="who">Not signed in</span>
+</header>
+
+<main>
+
+  <!-- STEP 1 -->
+  <section class="card" id="card-login">
+    <div class="step">Step 1 — Sign in</div>
+    <h2>Connect your Facebook account</h2>
+    <p class="note">Sign in to grant this tool access to the Facebook Page and Instagram professional account your business owns.</p>
+    <button class="fb" id="btn-login">Continue with Facebook</button>
+    <div class="granted hidden" id="granted"></div>
+  </section>
+
+  <!-- STEP 2 -->
+  <section class="card hidden" id="card-page">
+    <div class="step">Step 2 — Select Page</div>
+    <h2>Choose the Facebook Page for your brand</h2>
+    <p class="note">Uses <code>pages_show_list</code> to list the Pages you manage, then <code>instagram_basic</code> to resolve the connected Instagram professional account.</p>
+    <div class="row">
+      <select id="sel-page"></select>
+      <button class="sec" id="btn-page">Use this Page</button>
+    </div>
+    <div class="status hidden" id="st-page"></div>
+  </section>
+
+  <!-- STEP 3 -->
+  <section class="card hidden" id="card-search">
+    <div class="step">Step 3 — Find creators</div>
+    <h2>Search Instagram Creator Marketplace</h2>
+    <p class="note">Uses <code>instagram_creator_marketplace_discovery</code> to search creators and read their profile and audience insights.</p>
+    <div class="row">
+      <select id="f-country">
+        <option value="KR">South Korea</option>
+        <option value="US">United States</option>
+        <option value="JP">Japan</option>
+      </select>
+      <select id="f-interest">
+        <option value="BEAUTY">Beauty</option>
+        <option value="FASHION">Fashion</option>
+        <option value="FITNESS">Fitness</option>
+      </select>
+      <button class="fb" id="btn-search">Search creators</button>
+    </div>
+    <div id="results"></div>
+    <div class="status hidden" id="st-search"></div>
+  </section>
+
+</main>
+
+<script>
+// Demo scaffold for Meta App Review screencast.
+// Replace APP_ID with 997410669979262 and CONFIG_ID with 1605260767900228
+// to run the real Facebook Login for Business flow.
+const APP_ID    = '997410669979262';
+const CONFIG_ID = '1605260767900228';
+const DEMO = true; // set false once the real SDK flow is wired
+
+const $ = id => document.getElementById(id);
+const show = id => $(id).classList.remove('hidden');
+
+const PERMS = ['pages_show_list','pages_manage_metadata','instagram_basic',
+               'instagram_creator_marketplace_discovery','business_management'];
+
+const DEMO_PAGES = [
+  { id:'769145592941409', name:'Dr.Reju-All',    ig:'17841472253564811' },
+  { id:'670783406110278', name:'Rejuallofficial', ig:null }
+];
+
+const DEMO_CREATORS = [
+  { username:'mocked_username_1', country:'KR', gender:'female', age_bucket:'25-34', followers:72000,  engaged:5800,  onboarded:true  },
+  { username:'mocked_username_2', country:'KR', gender:'female', age_bucket:'18-24', followers:31000,  engaged:4100,  onboarded:true  },
+  { username:'mocked_username_3', country:'KR', gender:'male',   age_bucket:'25-34', followers:128000, engaged:9300,  onboarded:false },
+  { username:'mocked_username_4', country:'KR', gender:'female', age_bucket:'35-44', followers:19000,  engaged:2250,  onboarded:true  },
+  { username:'mocked_username_5', country:'KR', gender:'female', age_bucket:'25-34', followers:64000,  engaged:7100,  onboarded:true  }
+];
+
+let selectedPage = null;
+
+$('btn-login').addEventListener('click', () => {
+  if (DEMO) {
+    $('who').textContent = 'Signed in as Minjae Kim';
+    $('btn-login').disabled = true;
+    $('btn-login').textContent = 'Signed in';
+    $('granted').textContent = 'Granted: ' + PERMS.join(', ');
+    show('granted');
+    const sel = $('sel-page');
+    sel.innerHTML = DEMO_PAGES.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+    show('card-page');
+    return;
+  }
+  FB.login(r => { if (r.authResponse) location.reload(); }, { config_id: CONFIG_ID });
+});
+
+$('btn-page').addEventListener('click', () => {
+  const id = $('sel-page').value;
+  selectedPage = DEMO_PAGES.find(p => p.id === id);
+  $('st-page').textContent =
+    'GET /me/accounts  ->  Page "' + selectedPage.name + '" (' + selectedPage.id + ')\n' +
+    'GET /' + selectedPage.id + '?fields=instagram_business_account  ->  ' +
+    (selectedPage.ig ? 'IG user ' + selectedPage.ig : 'no Instagram account connected');
+  show('st-page');
+  if (selectedPage.ig) show('card-search');
+});
+
+$('btn-search').addEventListener('click', () => {
+  const country  = $('f-country').value;
+  const interest = $('f-interest').value;
+  const igUser   = selectedPage ? selectedPage.ig : '17841472253564811';
+
+  $('st-search').textContent =
+    'GET /' + igUser + '/creator_marketplace_creators\n' +
+    '  ?creator_countries=["' + country + '"]\n' +
+    '  &creator_interests=["' + interest + '"]\n' +
+    '  &fields=id,username,country,gender,age_bucket,onboarded_status,\n' +
+    '          insights.metrics(total_followers,creator_engaged_accounts).breakdown(GENDER)';
+  show('st-search');
+
+  const rows = DEMO_CREATORS.map(c => `
+    <tr>
+      <td><strong>@${c.username}</strong></td>
+      <td>${c.country}</td>
+      <td>${c.gender}</td>
+      <td>${c.age_bucket}</td>
+      <td>${c.followers.toLocaleString()}</td>
+      <td>${c.engaged.toLocaleString()}</td>
+      <td>${c.onboarded ? '<span class="pill">onboarded</span>' : '<span class="pill off">not onboarded</span>'}</td>
+    </tr>`).join('');
+
+  $('results').innerHTML = `
+    <p class="muted" style="margin-top:14px">
+      <span class="ok">${DEMO_CREATORS.length} creators</span> returned for ${country} / ${interest}.
+      Standard access returns mocked creator data.
+    </p>
+    <table>
+      <thead><tr>
+        <th>Creator</th><th>Country</th><th>Gender</th><th>Age</th>
+        <th>Followers</th><th>Engaged accounts</th><th>Marketplace</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+});
+</script>
+
+</body>
+</html>
