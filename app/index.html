@@ -33,9 +33,13 @@
   .muted { color:#65676b; font-size:13px; }
   .hidden { display:none; }
   .status { font-size:13px; padding:10px 12px; border-radius:6px; background:#f0f2f5; margin-top:12px;
-            white-space:pre-wrap; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+            white-space:pre-wrap; overflow-wrap:anywhere; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
   .granted { font-size:12px; color:#31a24c; }
   .ok { color:#31a24c; font-weight:600; }
+  .caption { font-size:14px; background:#fff8e1; border-left:4px solid #f5b400; padding:8px 12px;
+             border-radius:4px; margin:12px 0 0; }
+  .bio { font-size:12px; color:#65676b; max-width:280px; }
+  .detail { margin-top:14px; padding:14px; border:1px solid #dadde1; border-radius:8px; background:#fafbfc; }
 </style>
 </head>
 <body>
@@ -53,7 +57,10 @@
     <div class="step">Step 1 — Sign in</div>
     <h2>Connect your Facebook account</h2>
     <p class="note">Sign in to grant this tool access to the Facebook Page and Instagram professional account your business owns.</p>
-    <button class="fb" id="btn-login">Continue with Facebook</button>
+    <button class="fb" id="btn-login" title="Opens Facebook Login for Business (configuration 1605260767900228)">Continue with Facebook</button>
+    <p class="caption">This button opens Facebook Login for Business. On the consent screen the brand administrator grants
+      <b>“Discover content creators on the Instagram Creator Marketplace platform”</b> (instagram_creator_marketplace_discovery)
+      and the Page / Instagram permissions the search depends on.</p>
     <div class="granted hidden" id="granted"></div>
   </section>
 
@@ -61,10 +68,11 @@
   <section class="card hidden" id="card-page">
     <div class="step">Step 2 — Select Page</div>
     <h2>Choose the Facebook Page for your brand</h2>
-    <p class="note">Uses <code>pages_show_list</code> to list the Pages you manage, then <code>instagram_basic</code> to resolve the connected Instagram professional account.</p>
+    <p class="note">Uses <code>pages_show_list</code> to list the Pages you manage, then <code>instagram_basic</code> to resolve the connected Instagram professional account.
+      The Page access token returned here is the token every Creator Marketplace request in Step 3 is sent with.</p>
     <div class="row">
       <select id="sel-page"></select>
-      <button class="sec" id="btn-page">Use this Page</button>
+      <button class="sec" id="btn-page" title="Use this Page and its connected Instagram account as the brand account for creator search">Use this Page</button>
     </div>
     <div class="status hidden" id="st-page"></div>
   </section>
@@ -85,8 +93,10 @@
         <option value="FASHION">Fashion</option>
         <option value="FITNESS">Fitness</option>
       </select>
-      <button class="fb" id="btn-search">Search creators</button>
+      <button class="fb" id="btn-search" title="Calls GET /{ig-user-id}/creator_marketplace_creators with the selected filters">Search creators</button>
     </div>
+    <p class="caption">Pick the creator country and interest, then search. Each result shows the creator’s bio and follower count.
+      Click <b>View insights</b> to see one creator’s followers, engaged accounts and account reach.</p>
     <div id="results"></div>
     <div class="status hidden" id="st-search"></div>
   </section>
@@ -103,10 +113,12 @@ const VERSION   = 'v26.0';
 const $ = id => document.getElementById(id);
 const show = id => $(id).classList.remove('hidden');
 const hide = id => $(id).classList.add('hidden');
+const esc  = v => String(v).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 
 let userToken = null;
 let pages = [];          // [{id, name, access_token, ig}]
 let selectedPage = null;
+let lastList = [];       // last search result, used by the insights panel
 
 // ---- Facebook SDK ----
 window.fbAsyncInit = function () {
@@ -152,7 +164,7 @@ async function onConnected(token) {
 async function loadPages() {
   // One call: Pages, their tokens, and the connected IG account in the same response.
   const res = await api('me/accounts', {
-    fields: 'id,name,access_token,instagram_business_account',
+    fields: 'id,name,access_token,instagram_business_account{id,username}',
     access_token: userToken
   });
 
@@ -160,7 +172,8 @@ async function loadPages() {
     id: p.id,
     name: p.name,
     access_token: p.access_token,
-    ig: p.instagram_business_account ? p.instagram_business_account.id : null
+    ig: p.instagram_business_account ? p.instagram_business_account.id : null,
+    igName: p.instagram_business_account ? p.instagram_business_account.username : null
   }));
 
   // Fall back to a per-Page read for any Page the batch response left empty.
@@ -180,9 +193,10 @@ $('btn-page').addEventListener('click', () => {
   if (!selectedPage) return;
 
   $('st-page').textContent =
-    'GET /' + VERSION + '/me/accounts  ->  Page "' + selectedPage.name + '" (' + selectedPage.id + ')\n' +
-    'GET /' + VERSION + '/' + selectedPage.id + '?fields=instagram_business_account  ->  ' +
-    (selectedPage.ig ? 'IG user ' + selectedPage.ig : 'no Instagram account connected');
+    'GET /' + VERSION + '/me/accounts?fields=id,name,access_token,instagram_business_account{id,username}\n' +
+    '  ->  Page "' + selectedPage.name + '" (' + selectedPage.id + ')  ->  ' +
+    (selectedPage.ig ? 'connected Instagram @' + (selectedPage.igName || selectedPage.ig) + ' (' + selectedPage.ig + ')'
+                     : 'no Instagram account connected');
   show('st-page');
 
   hide('card-search');
@@ -198,14 +212,15 @@ $('btn-search').addEventListener('click', async () => {
   const ig       = selectedPage.ig;
 
   // total_followers does not accept a breakdown, so request the metrics plain.
-  const fields = 'id,username,country,gender,age_bucket,onboarded_status,' +
+  const fields = 'id,username,biography,country,gender,age_bucket,onboarded_status,' +
                  'insights.metrics(total_followers,creator_engaged_accounts)';
 
   $('st-search').textContent =
     'GET /' + VERSION + '/' + ig + '/creator_marketplace_creators\n' +
     '  ?creator_countries=["' + country + '"]\n' +
     '  &creator_interests=["' + interest + '"]\n' +
-    '  &fields=' + fields;
+    '  &fields=' + fields + '\n' +
+    '  (sent with the Page access token of "' + selectedPage.name + '")';
   show('st-search');
   $('results').innerHTML = '<p class="muted" style="margin-top:14px">Searching…</p>';
 
@@ -224,6 +239,7 @@ $('btn-search').addEventListener('click', async () => {
   }
 
   const list = res.data || [];
+  lastList = list;
   const metric = (c, name) => {
     const d = c.insights && c.insights.data ? c.insights.data.find(x => x.name === name) : null;
     return d && d.total_value ? d.total_value.value : null;
@@ -232,7 +248,7 @@ $('btn-search').addEventListener('click', async () => {
 
   const rows = list.map(c => `
     <tr>
-      <td><strong>@${c.username || c.id}</strong></td>
+      <td><strong>@${esc(c.username || c.id)}</strong><div class="bio">${esc(c.biography || '')}</div></td>
       <td>${c.country || '—'}</td>
       <td>${c.gender || '—'}</td>
       <td>${c.age_bucket || '—'}</td>
@@ -241,20 +257,60 @@ $('btn-search').addEventListener('click', async () => {
       <td>${c.onboarded_status
             ? '<span class="pill">onboarded</span>'
             : '<span class="pill off">not onboarded</span>'}</td>
+      <td><button class="sec" data-u="${esc(c.username || '')}" title="Loads this creator’s bio, followers, engaged accounts and account reach">View insights</button></td>
     </tr>`).join('');
 
   $('results').innerHTML = `
     <p class="muted" style="margin-top:14px">
       <span class="ok">${list.length} creators</span> returned for ${country} / ${interest}.
-      Standard access returns mocked creator data.
     </p>
+    <p class="caption">Test data notice: under Standard Access, Meta returns mocked creators (usernames “mocked_username_N”),
+      so their countries do not follow the filter. With Advanced Access this same request returns real marketplace creators.</p>
     <table>
       <thead><tr>
         <th>Creator</th><th>Country</th><th>Gender</th><th>Age</th>
-        <th>Followers</th><th>Engaged accounts</th><th>Marketplace</th>
+        <th>Followers</th><th>Engaged accounts</th><th>Marketplace</th><th></th>
       </tr></thead>
       <tbody>${rows}</tbody>
-    </table>`;
+    </table>
+    <div id="detail"></div>`;
+});
+
+// ---- Step 4: one creator's insights (bio, followers, engaged accounts, reach) ----
+const insightValue = (c, name) => {
+  const x = c && c.insights && c.insights.data ? c.insights.data.find(d => d.name === name) : null;
+  return x && x.total_value && x.total_value.value != null ? x.total_value.value : null;
+};
+
+$('results').addEventListener('click', async e => {
+  const u = e.target.dataset && e.target.dataset.u;
+  if (!u) return;
+  const row = lastList.find(c => c.username === u) || {};
+  $('detail').innerHTML = '<p class="muted">Loading insights for @' + esc(u) + '…</p>';
+
+  // Try all three metrics in one call; if Meta rejects the combination, ask for reach on its own.
+  const attempts = [
+    'username,biography,insights.metrics(total_followers,creator_engaged_accounts,creator_reach)',
+    'username,biography,insights.metrics(creator_reach)'
+  ];
+  let c = null, sent = attempts[0];
+  for (const fields of attempts) {
+    sent = fields;
+    const res = await api(selectedPage.ig + '/creator_marketplace_creators', {
+      username: u, fields: fields, access_token: selectedPage.access_token
+    });
+    c = res && !res.error && res.data && res.data[0] ? res.data[0] : null;
+    if (c) break;
+  }
+
+  const pick = name => insightValue(c, name) != null ? insightValue(c, name) : insightValue(row, name);
+  const num  = v => v == null ? '—' : Number(v).toLocaleString();
+  $('detail').innerHTML = `<div class="detail">
+      <h2>@${esc(u)}</h2><p class="bio">${esc((c && c.biography) || row.biography || '')}</p>
+      <p><b>Followers:</b> ${num(pick('total_followers'))} · <b>Engaged accounts:</b> ${num(pick('creator_engaged_accounts'))} · <b>Account reach:</b> ${num(pick('creator_reach'))}</p>
+      <p class="status">GET /${VERSION}/${selectedPage.ig}/creator_marketplace_creators?username=${esc(u)}&fields=${esc(sent)}
+  (sent with the Page access token of "${esc(selectedPage.name)}")</p>
+    </div>`;
 });
 </script>
 
