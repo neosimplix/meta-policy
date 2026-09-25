@@ -288,27 +288,35 @@ $('results').addEventListener('click', async e => {
   const row = lastList.find(c => c.username === u) || {};
   $('detail').innerHTML = '<p class="muted">Loading insights for @' + esc(u) + '…</p>';
 
-  // Try all three metrics in one call; if Meta rejects the combination, ask for reach on its own.
-  const attempts = [
-    'username,biography,insights.metrics(total_followers,creator_engaged_accounts,creator_reach)',
-    'username,biography,insights.metrics(creator_reach)'
-  ];
-  let c = null, sent = attempts[0];
-  for (const fields of attempts) {
-    sent = fields;
-    const res = await api(selectedPage.ig + '/creator_marketplace_creators', {
-      username: u, fields: fields, access_token: selectedPage.access_token
-    });
-    c = res && !res.error && res.data && res.data[0] ? res.data[0] : null;
-    if (c) break;
+  // creator_reach needs a timeframe; the follower-type breakdown splits reach into followers vs non-followers.
+  const fields = 'username,biography,insights.metrics(creator_reach).timeframe(this_month).breakdown(FOLLOW_TYPE)';
+  const base = { fields: fields, access_token: selectedPage.access_token };
+  // Look the creator up by username; if Meta cannot resolve it (Standard Access test data),
+  // repeat the Step 3 search and take the same creator from its results.
+  const byUsername = Object.assign({ username: u }, base);
+  const bySearch   = Object.assign({ creator_countries: JSON.stringify([$('f-country').value]),
+                                     creator_interests: JSON.stringify([$('f-interest').value]) }, base);
+  let c = null, sent = null;
+  for (const params of [byUsername, bySearch]) {
+    const res = await api(selectedPage.ig + '/creator_marketplace_creators', params);
+    const hit = res && !res.error && res.data ? res.data.find(x => x.username === u) : null;
+    if (hit) { c = hit; sent = params; break; }
   }
 
-  const pick = name => insightValue(c, name) != null ? insightValue(c, name) : insightValue(row, name);
-  const num  = v => v == null ? '—' : Number(v).toLocaleString();
+  const reach = c && c.insights && c.insights.data ? c.insights.data.find(d => d.name === 'creator_reach') : null;
+  const tv    = reach && reach.total_value ? reach.total_value : null;
+  const num   = v => v == null ? '—' : Number(v).toLocaleString();
+  const split = tv && tv.breakdowns && tv.breakdowns.results
+    ? ' (' + tv.breakdowns.results.map(r => esc(String(r.dimension_value).replace(/_/g, ' ')) + ' ' + num(r.value)).join(' · ') + ')'
+    : '';
+  const query = sent
+    ? Object.keys(sent).filter(k => k !== 'access_token').map(k => k + '=' + sent[k]).join('&')
+    : 'fields=' + fields;
   $('detail').innerHTML = `<div class="detail">
       <h2>@${esc(u)}</h2><p class="bio">${esc((c && c.biography) || row.biography || '')}</p>
-      <p><b>Followers:</b> ${num(pick('total_followers'))} · <b>Engaged accounts:</b> ${num(pick('creator_engaged_accounts'))} · <b>Account reach:</b> ${num(pick('creator_reach'))}</p>
-      <p class="status">GET /${VERSION}/${selectedPage.ig}/creator_marketplace_creators?username=${esc(u)}&fields=${esc(sent)}
+      <p><b>Followers:</b> ${num(insightValue(row, 'total_followers'))} · <b>Engaged accounts:</b> ${num(insightValue(row, 'creator_engaged_accounts'))}</p>
+      <p><b>Account reach (${esc((reach && reach.time_range || 'this_month').replace(/_/g, ' '))}):</b> ${tv ? num(tv.value) + split : '—'}</p>
+      <p class="status">GET /${VERSION}/${selectedPage.ig}/creator_marketplace_creators?${esc(query)}
   (sent with the Page access token of "${esc(selectedPage.name)}")</p>
     </div>`;
 });
